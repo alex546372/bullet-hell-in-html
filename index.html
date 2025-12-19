@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VOID SENTINEL | Predictive Bullet Hell</title>
+    <style>
+        :root {
+            --neon-blue: #00eeff;
+            --neon-red: #ff0044;
+            --void-bg: #020205;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: #e0e0e0;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            cursor: none; /* Кастомный прицел в игре */
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 100px rgba(255, 0, 0, 0.2);
+            border: 2px solid #111;
+            background: var(--void-bg);
+        }
+        canvas {
+            display: block;
+        }
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .bar-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .bar-container {
+            flex-grow: 1;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            overflow: hidden;
+        }
+        #boss-hp-bar {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #ff0000, #ff8800);
+            box-shadow: 0 0 15px rgba(255, 0, 0, 0.5);
+            transition: width 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        #player-hp-bar {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, var(--neon-blue), #0055ff);
+            box-shadow: 0 0 15px rgba(0, 238, 255, 0.5);
+            transition: width 0.2s ease-out;
+        }
+        .label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            color: rgba(255, 255, 255, 0.5);
+            min-width: 150px;
+        }
+        #screen-msg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            display: none;
+            z-index: 100;
+            background: rgba(0,0,0,0.8);
+            padding: 40px;
+            border: 1px solid #333;
+            backdrop-filter: blur(10px);
+        }
+        #screen-msg h1 {
+            font-size: 48px;
+            margin: 0;
+            letter-spacing: 10px;
+        }
+        .btn {
+            margin-top: 30px;
+            padding: 12px 40px;
+            background: transparent;
+            border: 1px solid var(--neon-blue);
+            color: var(--neon-blue);
+            cursor: pointer;
+            font-family: inherit;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: 0.3s;
+        }
+        .btn:hover {
+            background: var(--neon-blue);
+            color: #000;
+            box-shadow: 0 0 20px var(--neon-blue);
+        }
+        #difficulty-warning {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            color: #ff0000;
+            font-size: 12px;
+            opacity: 0.6;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.8; } }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div id="ui-overlay">
+            <div class="bar-wrapper">
+                <div class="label">SENTINEL_CORE</div>
+                <div class="bar-container"><div id="boss-hp-bar"></div></div>
+            </div>
+            <div class="bar-wrapper">
+                <div class="label">PILOT_STABILITY</div>
+                <div class="bar-container"><div id="player-hp-bar"></div></div>
+            </div>
+        </div>
+
+        <div id="difficulty-warning">PREDICTIVE AI ACTIVE // MAXIMUM AGGRESSION</div>
+
+        <div id="screen-msg">
+            <h1 id="msg-title">CONNECTION LOST</h1>
+            <p id="msg-desc">The void has reclaimed your essence.</p>
+            <button class="btn" onclick="resetGame()">RE-ESTABLISH LINK</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const bossHpBar = document.getElementById('boss-hp-bar');
+        const playerHpBar = document.getElementById('player-hp-bar');
+        const screenMsg = document.getElementById('screen-msg');
+        const msgTitle = document.getElementById('msg-title');
+        const msgDesc = document.getElementById('msg-desc');
+
+        const WIDTH = 900;
+        const HEIGHT = 850;
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+
+        let frameCount = 0;
+        let gameActive = true;
+        let shakeAmount = 0;
+        let isMouseDown = false; // Отслеживание нажатия ЛКМ
+
+        // Игрок с отслеживанием скорости для предсказания ИИ
+        let player = {
+            x: WIDTH / 2,
+            y: HEIGHT - 150,
+            prevX: WIDTH / 2,
+            prevY: HEIGHT - 150,
+            vx: 0,
+            vy: 0,
+            radius: 5,
+            hitbox: 3,
+            hp: 100,
+            maxHp: 100,
+            color: '#00eeff'
+        };
+
+        let boss = {
+            x: WIDTH / 2,
+            y: 200,
+            targetY: 200,
+            hp: 8000,
+            maxHp: 8000,
+            rotation: 0,
+            pulse: 0,
+            anger: 1 // Увеличивается с фазами
+        };
+
+        let bullets = [];
+        let bossBullets = [];
+        let particles = [];
+        let mouse = { x: WIDTH / 2, y: HEIGHT / 2 };
+
+        window.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+        });
+
+        // Слушатели событий мыши для стрельбы
+        window.addEventListener('mousedown', () => { isMouseDown = true; });
+        window.addEventListener('mouseup', () => { isMouseDown = false; });
+
+        function spawnParticle(x, y, color, count = 1) {
+            for(let i=0; i<count; i++) {
+                particles.push({
+                    x, y,
+                    vx: (Math.random() - 0.5) * 8,
+                    vy: (Math.random() - 0.5) * 8,
+                    life: 1,
+                    decay: 0.01 + Math.random() * 0.02,
+                    color
+                });
+            }
+        }
+
+        function createBossBullet(x, y, angle, speed, size = 4, color = '#ff3333', type = 'normal') {
+            bossBullets.push({
+                x, y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                radius: size,
+                color,
+                type,
+                life: 0
+            });
+        }
+
+        // --- ЛОГИКА ПРЕДСКАЗАНИЯ ИИ ---
+        function getPredictiveAngle(originX, originY, target, bulletSpeed) {
+            const dx = target.x - originX;
+            const dy = target.y - originY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const timeToHit = dist / bulletSpeed;
+            
+            const predictedX = target.x + (target.vx * timeToHit * 0.8); 
+            const predictedY = target.y + (target.vy * timeToHit * 0.8);
+            
+            return Math.atan2(predictedY - originY, predictedX - originX);
+        }
+
+        function updateBoss() {
+            boss.rotation += 0.03 * boss.anger;
+            boss.pulse += 0.05;
+            boss.anger = 1 + (1 - boss.hp / boss.maxHp); 
+
+            boss.y += (boss.targetY - boss.y) * 0.05;
+            boss.targetY = 200 + Math.sin(boss.pulse * 0.3) * 50;
+            boss.x = WIDTH/2 + Math.cos(boss.pulse * 0.2) * 100;
+
+            const hpRatio = boss.hp / boss.maxHp;
+
+            // 1. Снайперский выстрел с предсказанием
+            if (frameCount % Math.max(10, Math.floor(30 / boss.anger)) === 0) {
+                const speed = 7 * boss.anger;
+                const angle = getPredictiveAngle(boss.x, boss.y, player, speed);
+                createBossBullet(boss.x, boss.y, angle, speed, 5, '#ffffff', 'sniper');
+            }
+
+            // 2. Спиральные паттерны
+            if (frameCount % 3 === 0) {
+                const spiralAngle = frameCount * 0.2 * (hpRatio < 0.5 ? 1.5 : 1);
+                createBossBullet(boss.x, boss.y, spiralAngle, 4, 3, '#ff0044');
+                if (hpRatio < 0.6) createBossBullet(boss.x, boss.y, -spiralAngle, 4, 3, '#ffaa00');
+            }
+
+            // 3. Спец-атаки фаз
+            if (hpRatio < 0.4 && frameCount % 120 === 0) {
+                for (let i = 0; i < 40; i++) {
+                    createBossBullet(boss.x, boss.y, (i / 40) * Math.PI * 2, 3, 8, '#ff00ff');
+                }
+                shakeAmount = 15;
+            }
+
+            if (hpRatio < 0.25 && frameCount % 60 === 0) {
+                for(let i=0; i<5; i++) {
+                    createBossBullet(Math.random() * WIDTH, 0, Math.PI/2, 5, 4, '#ff0000');
+                }
+            }
+        }
+
+        function update() {
+            if (!gameActive) return;
+            frameCount++;
+
+            if (shakeAmount > 0) shakeAmount *= 0.9;
+
+            // Физика игрока
+            player.vx = (mouse.x - player.x);
+            player.vy = (mouse.y - player.y);
+            player.x = mouse.x;
+            player.y = mouse.y;
+
+            player.x = Math.max(player.radius, Math.min(WIDTH - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(HEIGHT - player.radius, player.y));
+
+            // Стрельба ТОЛЬКО при нажатой ЛКМ
+            if (isMouseDown && frameCount % 5 === 0) {
+                bullets.push({ x: player.x, y: player.y - 15, vy: -18 });
+            }
+
+            // Пули игрока
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                let b = bullets[i];
+                b.y += b.vy;
+                
+                let dist = Math.hypot(b.x - boss.x, b.y - boss.y);
+                if (dist < 70) {
+                    boss.hp -= 20;
+                    spawnParticle(b.x, b.y, '#00eeff', 2);
+                    bullets.splice(i, 1);
+                    continue;
+                }
+                if (b.y < -20) bullets.splice(i, 1);
+            }
+
+            // Пули босса
+            for (let i = bossBullets.length - 1; i >= 0; i--) {
+                let b = bossBullets[i];
+                b.x += b.vx;
+                b.y += b.vy;
+                b.life++;
+
+                if (b.type === 'sniper' && b.life < 30) {
+                   const angleToPlayer = Math.atan2(player.y - b.y, player.x - b.x);
+                   const currentAngle = Math.atan2(b.vy, b.vx);
+                   const newAngle = currentAngle + (angleToPlayer - currentAngle) * 0.02;
+                   const speed = Math.sqrt(b.vx*b.vx + b.vy*b.vy);
+                   b.vx = Math.cos(newAngle) * speed;
+                   b.vy = Math.sin(newAngle) * speed;
+                }
+
+                let dist = Math.hypot(b.x - player.x, b.y - player.y);
+                if (dist < b.radius + player.hitbox) {
+                    player.hp -= 8;
+                    shakeAmount = 10;
+                    spawnParticle(player.x, player.y, '#ff0000', 15);
+                    bossBullets.splice(i, 1);
+                    if (player.hp <= 0) endGame(false);
+                    continue;
+                }
+
+                if (b.x < -100 || b.x > WIDTH + 100 || b.y < -100 || b.y > HEIGHT + 100) {
+                    bossBullets.splice(i, 1);
+                }
+            }
+
+            // Частицы
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx; p.y += p.vy;
+                p.life -= p.decay;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+
+            updateBoss();
+
+            bossHpBar.style.width = (boss.hp / boss.maxHp) * 100 + '%';
+            playerHpBar.style.width = (player.hp / player.maxHp) * 100 + '%';
+
+            if (boss.hp <= 0) endGame(true);
+        }
+
+        function draw() {
+            ctx.save();
+            if (shakeAmount > 1) {
+                ctx.translate((Math.random()-0.5)*shakeAmount, (Math.random()-0.5)*shakeAmount);
+            }
+
+            ctx.fillStyle = '#020205';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            // Сетка
+            ctx.strokeStyle = 'rgba(0, 238, 255, 0.05)';
+            ctx.lineWidth = 1;
+            for(let i=0; i<WIDTH; i+=50) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, HEIGHT); ctx.stroke();
+            }
+            for(let i=0; i<HEIGHT; i+=50) {
+                ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(WIDTH, i); ctx.stroke();
+            }
+
+            // Частицы
+            particles.forEach(p => {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.fillRect(p.x, p.y, 2, 2);
+            });
+            ctx.globalAlpha = 1;
+
+            // Пули игрока
+            ctx.fillStyle = '#00eeff';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00eeff';
+            bullets.forEach(b => {
+                ctx.fillRect(b.x - 1, b.y, 3, 15);
+            });
+
+            // Пули босса
+            ctx.shadowBlur = 0;
+            bossBullets.forEach(b => {
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+                ctx.fillStyle = b.color;
+                ctx.fill();
+                if (b.type === 'sniper') {
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            });
+
+            // Отрисовка босса
+            ctx.save();
+            ctx.translate(boss.x, boss.y);
+            ctx.rotate(boss.rotation);
+            ctx.strokeStyle = '#ff0044';
+            ctx.lineWidth = 3;
+            for(let i=0; i<3; i++) {
+                ctx.rotate(Math.PI / 1.5);
+                ctx.strokeRect(-60, -60, 120, 120);
+            }
+
+            const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, 60);
+            grad.addColorStop(0, '#fff');
+            grad.addColorStop(0.2, '#ff0044');
+            grad.addColorStop(1, 'transparent');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(0, 0, 50 + Math.sin(boss.pulse*2)*10, 0, Math.PI*2);
+            ctx.fill();
+
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 20, 10 + Math.sin(boss.pulse)*5, 0, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = '#f00';
+            ctx.beginPath();
+            ctx.arc(Math.cos(boss.pulse)*5, 0, 4, 0, Math.PI*2);
+            ctx.fill();
+            ctx.restore();
+
+            // Отрисовка игрока
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius + 5, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(0, 238, 255, 0.3)';
+            ctx.stroke();
+            
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.hitbox, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Кастомный прицел
+            // Если кнопка нажата, прицел светится ярче
+            ctx.strokeStyle = isMouseDown ? '#fff' : '#00eeff';
+            ctx.lineWidth = isMouseDown ? 2 : 1;
+            ctx.shadowBlur = isMouseDown ? 10 : 0;
+            ctx.shadowColor = '#00eeff';
+            ctx.beginPath();
+            ctx.moveTo(mouse.x - 15, mouse.y); ctx.lineTo(mouse.x + 15, mouse.y);
+            ctx.moveTo(mouse.x, mouse.y - 15); ctx.lineTo(mouse.x, mouse.y + 15);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            ctx.restore();
+
+            if (gameActive) {
+                requestAnimationFrame(draw);
+                update();
+            }
+        }
+
+        function endGame(win) {
+            gameActive = false;
+            isMouseDown = false;
+            screenMsg.style.display = 'block';
+            if (win) {
+                msgTitle.innerText = "VOID PURIFIED";
+                msgTitle.style.color = "#00eeff";
+                msgDesc.innerText = "You have defied the Sentinel's prediction.";
+            } else {
+                msgTitle.innerText = "ENTITY ERASED";
+                msgTitle.style.color = "#ff0044";
+                msgDesc.innerText = "Calculated. Your movement was predictable.";
+            }
+        }
+
+        function resetGame() {
+            player.hp = 100;
+            boss.hp = boss.maxHp;
+            bossBullets = [];
+            bullets = [];
+            particles = [];
+            frameCount = 0;
+            gameActive = true;
+            isMouseDown = false;
+            screenMsg.style.display = 'none';
+            draw();
+        }
+
+        draw();
+    </script>
+</body>
+</html>
